@@ -1,0 +1,253 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{appname}}
+  namespace: {{namespace}}
+spec:
+  serviceName: {{appname}}
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{appname}}
+  template:
+    metadata:
+      labels:
+        app: {{appname}}
+    spec:
+      subdomain: {{appname}}
+      terminationGracePeriodSeconds: 300
+      initContainers:
+        #- name: makesharedhome
+        #  image: busybox
+        #  command: ["mkdir", "-p", "/var/atlassian/shared"]
+        #  volumeMounts:
+        #    - mountPath: "/var/atlassian/shared"
+        #      name: shared-home
+        - name: conniehomeperms
+          image: busybox
+          command: ["chown", "daemon:daemon", "-R", "/var/atlassian/application-data/confluence/"]
+          volumeMounts:
+            - mountPath: "/var/atlassian/application-data/confluence"
+              name: home
+        - name: conniesharedperms
+          image: busybox
+          command: ["chown", "daemon:daemon", "-R", "/var/atlassian/shared"]
+          volumeMounts:
+            - mountPath: "/var/atlassian/shared"
+              name: shared-home
+      containers:
+        - name: {{appname}}
+          image: atlassian/confluence-server:6.15.3
+          lifecycle:
+            postStart:
+              exec:
+                command: ["chown", "daemon:daemon", "/var/atlassian/application-data/confluence/confluence.cfg.xml"]
+          ports:
+            - containerPort: 8090
+              name: connieport
+            - containerPort: 5701
+              name: confhzcast
+          env:
+            - name: JVM_MINIMUM_MEMORY
+              value: {{jvm}}
+              # 2048m
+            - name: JVM_MAXIMUM_MEMORY
+              value: {{jvm}}
+              # 2048m
+            - name: CATALINA_CONNECTOR_PROXYNAME
+              value: {{proxyname}}
+              # confluence.company.com
+            - name: CATALINA_CONNECTOR_SCHEME
+              value: {{proxyscheme}}
+              # https
+            - name: CATALINA_CONNECTOR_SECURE
+              value: "true"
+              # Value = "true
+            - name: SDOMAIN
+              value: .{{appname}}
+            - name: PODIP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          readinessProbe:
+            httpGet:
+              port: 8090
+              path: /status
+            initialDelaySeconds: 180
+            periodSeconds: 15
+            successThreshold: 2
+            failureThreshold: 2
+            timeoutSeconds: 5
+          volumeMounts:
+            - mountPath: "/var/atlassian/application-data/confluence"
+              name: home
+            - mountPath: "/var/atlassian/shared"
+              name: shared-home
+            - mountPath: "/var/atlassian/application-data/confluence/confluence.cfg.xml"
+              subPath: confluence.cfg.xml
+              name: clocal-db-config-volume
+            - mountPath: "/var/atlassian/shared/confluence.cfg.xml"
+              subPath: confluence.cfg.xml
+              name: cshared-db-config-volume
+
+
+      volumes:
+        - name: home
+          emptyDir:
+            {}
+        - name: shared-home
+          persistentVolumeClaim:
+            claimName: confluence
+        - name: clocal-db-config-volume
+          configMap:
+            name: clocal-db-config-volume
+            defaultMode: 0777
+        - name: cshared-db-config-volume
+          configMap:
+            name: cshared-db-config-volume
+            defaultMode: 0777
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{namespace}}
+  name: clocal-db-config-volume
+  labels:
+    app: {{appname}}
+data:
+  confluence.cfg.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+
+    <confluence-configuration>
+      <setupStep>complete</setupStep>
+      <setupType>cluster</setupType>
+      <buildNumber>8100</buildNumber>
+      <properties>
+        <property name="access.mode">READ_WRITE</property>
+        <property name="admin.ui.allow.daily.backup.custom.location">false</property>
+        <property name="admin.ui.allow.manual.backup.download">false</property>
+        <property name="admin.ui.allow.site.support.email">false</property>
+        <property name="atlassian.license.message">AAABQg0ODAoPeNp1UMtqwkAU3c9XDHTTLiJ5aFEh0JhkIY1ajBUX3VzDTTuQTMKdGal/30mi2JZ2N 3PO5bzudgZ51BIPXO5687E7n0x5nOy473ozFjdSQ6HXUGNYH5HkE+gKlBIgR0VTs6KR5cgeiBOGm gyyF0PFByhMQGPYSTju2AlclokCpcL0sxV0/kZOOvLikq5AVH/a5EgnpGUSLlI/cvbRY+ActlHkz A6L5yGDlYQYpUYacuTmqAoSrRaNHBArbmkJsvgnRa+zNp3/pnxVSCp0vAHNNVAnXUKl8NrFxsmWS Z6uncwLJv7U9Xxmf+FPZEPvIIWCPkhLWAskrkzbNqRZTNgTv9fqTS82u3OL/f7xZrVKt/Eyylg1U HubsZP1WYK3tnbNsjJoe/L7bhY+7PLwNufpCSrTO7Lbc5jnC6gprLcwLAIUR1tw17kh85+jJRZ2J 8UJ9d765SQCFBA5Z3qeKjdlnSlKjcR3kRo1uJQYX02g0</property>
+        <property name="attachments.dir">${confluenceHome}/attachments</property>
+        <property name="confluence.cluster">true</property>
+        <property name="confluence.cluster.address"></property>
+        <property name="confluence.cluster.home">/var/atlassian/shared</property>
+        <property name="confluence.cluster.interface">eth0</property>
+        <property name="confluence.cluster.join.type">multicast</property>
+        <property name="confluence.cluster.name">{{appname}}</property>
+        <property name="confluence.cluster.ttl">1</property>
+        <property name="confluence.setup.server.id"></property>
+        <property name="confluence.webapp.context.path"></property>
+        <property name="hibernate.c3p0.acquire_increment">1</property>
+        <property name="hibernate.c3p0.idle_test_period">100</property>
+        <property name="hibernate.c3p0.max_size">80</property>
+        <property name="hibernate.c3p0.max_statements">0</property>
+        <property name="hibernate.c3p0.min_size">20</property>
+        <property name="hibernate.c3p0.preferredTestQuery">select 1</property>
+        <property name="hibernate.c3p0.timeout">30</property>
+        <property name="hibernate.connection.driver_class">org.postgresql.Driver</property>
+        <property name="hibernate.connection.isolation">2</property>
+        <property name="hibernate.connection.password">{{dbpass}}</property>
+        <property name="hibernate.connection.url">jdbc:postgresql://{{postgresserver}}.{{namespace}}:5432/{{databasename}}</property>
+        <property name="hibernate.connection.username">{{dbuser}}</property>
+        <property name="hibernate.database.lower_non_ascii_supported">true</property>
+        <property name="hibernate.dialect">com.atlassian.confluence.impl.hibernate.dialect.PostgreSQLDialect</property>
+        <property name="hibernate.setup">true</property>
+        <property name="jwt.private.key"></property>
+        <property name="jwt.public.key"></property>
+        <property name="lucene.index.dir">${localHome}/index</property>
+        <property name="synchrony.encryption.disabled">true</property>
+        <property name="synchrony.proxy.enabled">true</property>
+        <property name="webwork.multipart.saveDir">${localHome}/temp</property>
+      </properties>
+    </confluence-configuration>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{namespace}}
+  name: cshared-db-config-volume
+  labels:
+    app: {{appname}}
+data:
+  confluence.cfg.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+
+    <confluence-configuration>
+      <setupStep>complete</setupStep>
+      <setupType>cluster</setupType>
+      <buildNumber>8100</buildNumber>
+      <properties>
+        <property name="access.mode">READ_WRITE</property>
+        <property name="atlassian.license.message">AAABQg0ODAoPeNp1UMtqwkAU3c9XDHTTLiJ5aFEh0JhkIY1ajBUX3VzDTTuQTMKdGal/30mi2JZ2N 3PO5bzudgZ51BIPXO5687E7n0x5nOy473ozFjdSQ6HXUGNYH5HkE+gKlBIgR0VTs6KR5cgeiBOGm gyyF0PFByhMQGPYSTju2AlclokCpcL0sxV0/kZOOvLikq5AVH/a5EgnpGUSLlI/cvbRY+ActlHkz A6L5yGDlYQYpUYacuTmqAoSrRaNHBArbmkJsvgnRa+zNp3/pnxVSCp0vAHNNVAnXUKl8NrFxsmWS Z6uncwLJv7U9Xxmf+FPZEPvIIWCPkhLWAskrkzbNqRZTNgTv9fqTS82u3OL/f7xZrVKt/Eyylg1U HubsZP1WYK3tnbNsjJoe/L7bhY+7PLwNufpCSrTO7Lbc5jnC6gprLcwLAIUR1tw17kh85+jJRZ2J 8UJ9d765SQCFBA5Z3qeKjdlnSlKjcR3kRo1uJQYX02g0</property>
+        <property name="confluence.cluster">true</property>
+        <property name="hibernate.setup">true</property>
+        <property name="jwt.private.key">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</property>
+        <property name="jwt.public.key">MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAmGRVgCFdM6U7SxpNPMritQlrIti40IyLVXXEJR6pShQEF6HCvXM5TkCS1ZJsEQSCzd4lmasmc58CzB1lf83/vTCmaa+shCZfa6oMTe1qk2KaK466LcfvEyNXrpoHWvC9pHvfkYg4cwVJUNq7Z9v1NV5caPu40w3E2AWLh77sEki/zb3lN9DObfX+qU4u0gQijbKz8vvMpr7JUIOr5XuDhyWbQZDvfV+NgBjn+28nuvIrmXvfHvA1AYJ5CMzFATY/o3yzQZ9mNP26k22ziphettb01cB5UzaL6PqsTSVw//FG2nLUGUJsWXwczIIBDjLCv/vsrUg9EFRlnFzN3D7o3dZFtMtNGTBXocOfOetEEPGl74y+PX77FN3GqTJxGqQZ1Xt31peez/RWXO9Egn5mSXt/eQtUKyUpAWy8USk/H7tjbPidXdhljqSyj/oh6siEofWe7iJtdrQTo/ME/ra50wVzkV74sSTWpW3yo1Hoi4O6IcR2nNuZLAdI0YEG9ZrBAgMBAAE=</property>
+        <property name="lucene.index.dir">${localHome}/index</property>
+      </properties>
+    </confluence-configuration>
+---
+### Persistent Volume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  namespace: {{namespace}}
+  name: {{connievolumename}}
+spec:
+  capacity:
+    storage: {{storagesize}}
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: {{nfsserverip}}
+    path: {{nfspath}}
+---
+### Persistent Volume Claim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{connievolumename}}
+  namespace: {{namespace}}
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+---
+### Kubernetes v1 Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: connie-external
+  namespace: {{namespace}}
+  labels:
+    app: {{appname}}
+spec:
+  type: LoadBalancer
+  externalIPs:
+    - {{nodeip1}}
+    - {{nodeip2}}
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8090
+      protocol: TCP
+  sessionAffinity: ClientIP
+  selector:
+    app: {{appname}}
+---
+### Headless service for POD DNS
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: {{namespace}}
+  name: {{appname}}
+    #labels:
+  #app: {{appname}}
+spec:
+  selector:
+    app: {{appname}}
+  clusterIP: None
